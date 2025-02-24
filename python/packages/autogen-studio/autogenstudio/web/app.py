@@ -73,6 +73,10 @@ app.add_middleware(
 
 @app.middleware("http")
 async def restrict_ips(request: Request, call_next):
+    # Skip IP check for health check endpoint
+    if request.url.path == "/api/health":
+        return await call_next(request)
+
     client_ip = request.client.host
     forwarded_for = request.headers.get("X-Forwarded-For")
     real_ip = forwarded_for.split(",")[0].strip() if forwarded_for else None
