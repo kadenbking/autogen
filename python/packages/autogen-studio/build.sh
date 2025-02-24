@@ -9,3 +9,6 @@ npm install --global yarn
 cd frontend
 yarn install
 npx gatsby build --prefix-paths
+
+# Move built frontend to backend's expected location
+mv public ../autogenstudio/web/ui
