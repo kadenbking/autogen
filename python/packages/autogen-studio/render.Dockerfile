@@ -13,5 +13,5 @@ WORKDIR $HOME/app
 COPY . $HOME/app
 
 # Use Render's PORT environment variable
-CMD gunicorn -w 2 --timeout 600 -k uvicorn.workers.UvicornWorker autogenstudio.web.app:app --bind "0.0.0.0:$PORT"
+CMD CMD autogenstudio ui --host 0.0.0.0 --port $PORT
 
