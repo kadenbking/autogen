@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 # import logging
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
@@ -67,6 +67,21 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Whitelist IP's
+
+
+@app.middleware("http")
+async def restrict_ips(request: Request, call_next):
+    client_ip = request.client.host
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    real_ip = forwarded_for.split(",")[0].strip() if forwarded_for else None
+
+    if client_ip not in settings.ALLOWED_IPS and (real_ip not in settings.ALLOWED_IPS if real_ip else True):
+        return Response(status_code=403, content="Access denied")
+
+    return await call_next(request)
+
 
 # Create API router with version and documentation
 api = FastAPI(
