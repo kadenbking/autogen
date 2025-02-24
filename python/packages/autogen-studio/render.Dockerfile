@@ -13,4 +13,5 @@ WORKDIR $HOME/app
 COPY . $HOME/app
 
 # Use Render's PORT environment variable
-CMD gunicorn -w $(($(getconf _NPROCESSORS_ONLN) * 2 + 1)) --timeout 12600 -k uvicorn.workers.UvicornWorker autogenstudio.web.app:app --bind "0.0.0.0:10000"
+CMD gunicorn -w 2 --timeout 600 -k uvicorn.workers.UvicornWorker autogenstudio.web.app:app --bind "0.0.0.0:$PORT"
+
