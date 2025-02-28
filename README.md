@@ -17,30 +17,15 @@ I found it easiest to run the modified web application using the pre-configured 
 
 ## Deployment
 
-This fork is deployed for internal use on [Render's](render.com) free tier for web services using a docker image. To update the docker image, follow the guide below:
-
-### Docker Build
+This fork is deployed for internal use on AWS' ECS Fargate Service using a docker image. To update the docker image, follow the guide below:
 
 ```
 # Open directory: `/python/packages/autogen-studio`
 
-$ docker build -t autogenstudio -f render.Dockerfile .
-$ docker login
-$ docker tag autogenstudio <docker_username>/autogenstudio
-$ docker push <docker_username>/autogenstudio
+$ docker build -t ptg/autogenstudio -f ecs.Dockerfile .
+$ docker tag autogenstudio ptg/autogenstudio
+$ docker push ptg/autogenstudio
 
-# Optional: Run the application
-# `docker run -p 10000:10000 autogenstudio` OR `docker run -p 10000:10000 <docker_username>/autogenstudio`
-
-# Run the application with environment variables
-# `docker run -e AUTOGENSTUDIO_ALLOWED_IPS='["<whitelisted-ip-address>"]' -p 10000:10000 kadencf/autogenstudio`
+# Optional: Run the application with environment variables
+# `docker run -e AUTOGENSTUDIO_ALLOWED_IPS='["<whitelisted-ip-address>"]' -p 8080:8080 ptg/autogenstudio`
 ```
-
-### Render Configuration
-
-1. Render.com
-2. New web service
-3. Deploy from Docker image > `docker.io/<docker_username>/autogenstudio:latest`
-4. Set health check > `/api/health`
-5. Set environment variable > `AUTOGENSTUDIO_ALLOWED_IPS=["<whitelisted-ip-address>"]`
-6. Deploy!

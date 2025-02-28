@@ -28,8 +28,8 @@ RUN mv /code/frontend/public /code/autogenstudio/web/ui
 RUN pip install -e /code/
 
 # Expose the necessary ports
-EXPOSE 10000
+EXPOSE 8080
 
 # Start the backend and frontend (using `autogenstudio ui`)
-CMD ["autogenstudio", "ui", "--host", "0.0.0.0", "--port", "10000"]
+CMD ["autogenstudio", "ui", "--host", "0.0.0.0", "--port", "8080"]
 
