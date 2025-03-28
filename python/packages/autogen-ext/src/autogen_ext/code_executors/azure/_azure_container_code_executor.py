@@ -70,6 +70,7 @@ class ACADynamicSessionsCodeExecutor(CodeExecutor):
             a default working directory will be used. The default working
             directory is the current directory ".".
         functions (List[Union[FunctionWithRequirements[Any, A], Callable[..., Any]]]): A list of functions that are available to the code executor. Default is an empty list.
+        suppress_result_output bool: By default the executor will attach any result info in the execution response to the result outpu. Set this to True to prevent this.
     """
 
     SUPPORTED_LANGUAGES: ClassVar[List[str]] = [
@@ -95,6 +96,7 @@ $functions"""
             ]
         ] = [],
         functions_module: str = "functions",
+        suppress_result_output: bool = False,
     ):
         if timeout < 1:
             raise ValueError("Timeout must be greater than or equal to 1.")
@@ -120,6 +122,8 @@ $functions"""
         else:
             self._setup_functions_complete = True
 
+        self._suppress_result_output = suppress_result_output
+
         self._pool_management_endpoint = pool_management_endpoint
         self._access_token: str | None = None
         self._session_id: str = str(uuid4())
@@ -131,7 +135,7 @@ $functions"""
     # TODO: expiration?
     def _ensure_access_token(self) -> None:
         if not self._access_token:
-            scope = "https://dynamicsessions.io"
+            scope = "https://dynamicsessions.io/.default"
             self._access_token = self._credential.get_token(scope).token
 
     def format_functions_for_prompt(self, prompt_template: str = FUNCTION_PROMPT_TEMPLATE) -> str:
@@ -433,7 +437,8 @@ import pkg_resources\n[d.project_name for d in pkg_resources.working_set]
                     data = data["properties"]
                     logs_all += data.get("stderr", "") + data.get("stdout", "")
                     if "Success" in data["status"]:
-                        logs_all += str(data["result"])
+                        if not self._suppress_result_output:
+                            logs_all += str(data["result"])
                     elif "Failure" in data["status"]:
                         exitcode = 1
 
@@ -458,3 +463,13 @@ import pkg_resources\n[d.project_name for d in pkg_resources.working_set]
         self._access_token = None
         self._available_packages = None
         self._setup_cwd_complete = False
+
+    async def start(self) -> None:
+        """(Experimental) Start the code executor."""
+        # No setup needed for this executor
+        pass
+
+    async def stop(self) -> None:
+        """(Experimental) Stop the code executor."""
+        # No cleanup needed for this executor
+        pass

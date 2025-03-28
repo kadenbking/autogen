@@ -25,6 +25,7 @@ from typing import (
 import tiktoken
 from anthropic import AsyncAnthropic, AsyncStream
 from anthropic.types import (
+    Base64ImageSourceParam,
     ContentBlock,
     ImageBlockParam,
     Message,
@@ -36,7 +37,6 @@ from anthropic.types import (
     ToolResultBlockParam,
     ToolUseBlock,
 )
-from anthropic.types.image_block_param import Source
 from autogen_core import (
     EVENT_LOGGER_NAME,
     TRACE_LOGGER_NAME,
@@ -44,9 +44,8 @@ from autogen_core import (
     Component,
     FunctionCall,
     Image,
-    MessageHandlerContext,
 )
-from autogen_core.logging import LLMCallEvent
+from autogen_core.logging import LLMCallEvent, LLMStreamEndEvent, LLMStreamStartEvent
 from autogen_core.models import (
     AssistantMessage,
     ChatCompletionClient,
@@ -62,6 +61,7 @@ from autogen_core.models import (
     validate_model_info,
 )
 from autogen_core.tools import Tool, ToolSchema
+from pydantic import BaseModel, SecretStr
 from typing_extensions import Self, Unpack
 
 from . import _model_info
@@ -160,7 +160,7 @@ def user_message_to_anthropic(message: UserMessage) -> MessageParam:
                 blocks.append(
                     ImageBlockParam(
                         type="image",
-                        source=Source(
+                        source=Base64ImageSourceParam(
                             type="base64",
                             media_type=get_mime_type_from_image(part),
                             data=part.to_base64(),
@@ -408,12 +408,41 @@ class BaseAnthropicChatCompletionClient(ChatCompletionClient):
         self._total_usage = RequestUsage(prompt_tokens=0, completion_tokens=0)
         self._actual_usage = RequestUsage(prompt_tokens=0, completion_tokens=0)
 
+    def _merge_system_messages(self, messages: Sequence[LLMMessage]) -> Sequence[LLMMessage]:
+        """
+        Merge continuous system messages into a single message.
+        """
+        _messages: List[LLMMessage] = []
+        system_message_content = ""
+        _first_system_message_idx = -1
+        _last_system_message_idx = -1
+        # Index of the first system message for adding the merged system message at the correct position
+        for idx, message in enumerate(messages):
+            if isinstance(message, SystemMessage):
+                if _first_system_message_idx == -1:
+                    _first_system_message_idx = idx
+                elif _last_system_message_idx + 1 != idx:
+                    # That case, system message is not continuous
+                    # Merge system messages only contiues system messages
+                    raise ValueError("Multiple and Not continuous system messages are not supported")
+                system_message_content += message.content + "\n"
+                _last_system_message_idx = idx
+            else:
+                _messages.append(message)
+        system_message_content = system_message_content.rstrip()
+        if system_message_content != "":
+            system_message = SystemMessage(content=system_message_content)
+            _messages.insert(_first_system_message_idx, system_message)
+        messages = _messages
+
+        return messages
+
     async def create(
         self,
         messages: Sequence[LLMMessage],
         *,
         tools: Sequence[Tool | ToolSchema] = [],
-        json_output: Optional[bool] = None,
+        json_output: Optional[bool | type[BaseModel]] = None,
         extra_create_args: Mapping[str, Any] = {},
         cancellation_token: Optional[CancellationToken] = None,
     ) -> CreateResult:
@@ -435,14 +464,19 @@ class BaseAnthropicChatCompletionClient(ChatCompletionClient):
 
             if json_output is True:
                 create_args["response_format"] = {"type": "json_object"}
+            elif isinstance(json_output, type):
+                raise ValueError("Structured output is currently not supported for Anthropic models")
 
         # Process system message separately
         system_message = None
         anthropic_messages: List[MessageParam] = []
 
+        # Merge continuous system messages into a single message
+        messages = self._merge_system_messages(messages)
         for message in messages:
             if isinstance(message, SystemMessage):
                 if system_message is not None:
+                    # if that case, system message is must only one
                     raise ValueError("Multiple system messages are not supported")
                 system_message = to_anthropic_type(message)
             else:
@@ -503,19 +537,12 @@ class BaseAnthropicChatCompletionClient(ChatCompletionClient):
             completion_tokens=result.usage.output_tokens,
         )
 
-        # Log the event if in a handler context
-        try:
-            agent_id = MessageHandlerContext.agent_id()
-        except RuntimeError:
-            agent_id = None
-
         logger.info(
             LLMCallEvent(
-                messages=cast(Dict[str, Any], anthropic_messages),
+                messages=cast(List[Dict[str, Any]], anthropic_messages),
                 response=result.model_dump(),
                 prompt_tokens=usage.prompt_tokens,
                 completion_tokens=usage.completion_tokens,
-                agent_id=agent_id,
             )
         )
 
@@ -575,7 +602,7 @@ class BaseAnthropicChatCompletionClient(ChatCompletionClient):
         messages: Sequence[LLMMessage],
         *,
         tools: Sequence[Tool | ToolSchema] = [],
-        json_output: Optional[bool] = None,
+        json_output: Optional[bool | type[BaseModel]] = None,
         extra_create_args: Mapping[str, Any] = {},
         cancellation_token: Optional[CancellationToken] = None,
         max_consecutive_empty_chunk_tolerance: int = 0,
@@ -602,13 +629,19 @@ class BaseAnthropicChatCompletionClient(ChatCompletionClient):
             if json_output is True:
                 create_args["response_format"] = {"type": "json_object"}
 
+            if isinstance(json_output, type):
+                raise ValueError("Structured output is currently not supported for Anthropic models")
+
         # Process system message separately
         system_message = None
         anthropic_messages: List[MessageParam] = []
 
+        # Merge continuous system messages into a single message
+        messages = self._merge_system_messages(messages)
         for message in messages:
             if isinstance(message, SystemMessage):
                 if system_message is not None:
+                    # if that case, system message is must only one
                     raise ValueError("Multiple system messages are not supported")
                 system_message = to_anthropic_type(message)
             else:
@@ -673,8 +706,18 @@ class BaseAnthropicChatCompletionClient(ChatCompletionClient):
         output_tokens: int = 0
         stop_reason: Optional[str] = None
 
+        first_chunk = True
+
         # Process the stream
         async for chunk in stream:
+            if first_chunk:
+                first_chunk = False
+                # Emit the start event.
+                logger.info(
+                    LLMStreamStartEvent(
+                        messages=cast(List[Dict[str, Any]], anthropic_messages),
+                    )
+                )
             # Handle different event types
             if chunk.type == "content_block_start":
                 if chunk.content_block.type == "tool_use":
@@ -769,11 +812,23 @@ class BaseAnthropicChatCompletionClient(ChatCompletionClient):
             thought=thought,
         )
 
+        # Emit the end event.
+        logger.info(
+            LLMStreamEndEvent(
+                response=result.model_dump(),
+                prompt_tokens=usage.prompt_tokens,
+                completion_tokens=usage.completion_tokens,
+            )
+        )
+
         # Update usage statistics
         self._total_usage = _add_usage(self._total_usage, usage)
         self._actual_usage = _add_usage(self._actual_usage, usage)
 
         yield result
+
+    async def close(self) -> None:
+        await self._client.close()
 
     def count_tokens(self, messages: Sequence[LLMMessage], *, tools: Sequence[Tool | ToolSchema] = []) -> int:
         """
@@ -915,16 +970,23 @@ class AnthropicChatCompletionClient(
 
     .. code-block:: python
 
+        import asyncio
         from autogen_ext.models.anthropic import AnthropicChatCompletionClient
         from autogen_core.models import UserMessage
 
-        anthropic_client = AnthropicChatCompletionClient(
-            model="claude-3-sonnet-20240229",
-            api_key="your-api-key",  # Optional if ANTHROPIC_API_KEY is set in environment
-        )
 
-        result = await anthropic_client.create([UserMessage(content="What is the capital of France?", source="user")])
-        print(result)
+        async def main():
+            anthropic_client = AnthropicChatCompletionClient(
+                model="claude-3-sonnet-20240229",
+                api_key="your-api-key",  # Optional if ANTHROPIC_API_KEY is set in environment
+            )
+
+            result = await anthropic_client.create([UserMessage(content="What is the capital of France?", source="user")])  # type: ignore
+            print(result)
+
+
+        if __name__ == "__main__":
+            asyncio.run(main())
 
     To load the client from a configuration:
 
@@ -938,25 +1000,6 @@ class AnthropicChatCompletionClient(
         }
 
         client = ChatCompletionClient.load_component(config)
-
-    The client supports function calling with Claude models that have the capability:
-
-    .. code-block:: python
-
-        from autogen_core.tools import FunctionTool
-
-
-        def get_weather(location: str) -> str:
-            '''Get the weather for a location'''
-            return f"The weather in {location} is sunny."
-
-
-        tool = FunctionTool(get_weather)
-
-        result = await anthropic_client.create(
-            [UserMessage(content="What's the weather in Paris?", source="user")],
-            tools=[tool],
-        )
     """
 
     component_type = "model"
@@ -1000,4 +1043,9 @@ class AnthropicChatCompletionClient(
     @classmethod
     def _from_config(cls, config: AnthropicClientConfigurationConfigModel) -> Self:
         copied_config = config.model_copy().model_dump(exclude_none=True)
+
+        # Handle api_key as SecretStr
+        if "api_key" in copied_config and isinstance(config.api_key, SecretStr):
+            copied_config["api_key"] = config.api_key.get_secret_value()
+
         return cls(**copied_config)
