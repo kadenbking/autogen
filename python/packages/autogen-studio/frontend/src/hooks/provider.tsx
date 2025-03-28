@@ -28,8 +28,13 @@ const AppProvider = ({ children }: any) => {
     setLocalStorage("darkmode", darkMode, false);
   };
 
-  // We'll use auth context to get user and logout function
-  const { user, logout } = useAuth();
+  // Modify logic here to add your own authentication
+  const initUser = {
+    name: "PTG Admin",
+    email: "admin@paytechguide.com",
+    username: "ptg_admin",
+  };
+  const [user, setUser] = useState<IUser | null>(initUser);
 
   return (
     <appContext.Provider
